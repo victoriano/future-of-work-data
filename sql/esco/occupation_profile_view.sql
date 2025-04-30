@@ -138,20 +138,13 @@ language_skills_agg AS (
     GROUP BY dos.occupationUri
 ),
 
--- Process alternative labels into a JSON array
-alt_labels_json AS (
+-- Simplified CTE to pass through raw altLabels
+alt_labels_raw AS (
     SELECT
         conceptUri,
-        json_group_array(label) AS alternative_names_json
-    FROM (
-        SELECT DISTINCT -- Ensure distinct labels from altLabels
-            conceptUri,
-            UNNEST(STRING_SPLIT(REGEXP_REPLACE(altLabels, '^\s*|\s*$', ''), '\n')) AS label
-        FROM occupations_en
-        WHERE altLabels IS NOT NULL AND altLabels != ''
-    ) AS unnested_labels
-    WHERE label IS NOT NULL AND label != '' -- Filter out empty strings after split
-    GROUP BY conceptUri
+        altLabels AS raw_alternative_names -- Pass through raw labels
+    FROM occupations_en
+    WHERE altLabels IS NOT NULL AND altLabels != ''
 )
 
 -- Main query combining all the information
@@ -177,7 +170,8 @@ SELECT
     COALESCE(dsa.digital_skills, '[]') AS digital_skills,
     COALESCE(tsa.transversal_skills, '[]') AS transversal_skills,
     COALESCE(lsa.language_skills, '[]') AS language_skills,
-    COALESCE(alj.alternative_names_json, '[]') AS alternative_names,
+    -- Output raw alternative names for external processing
+    COALESCE(alr.raw_alternative_names, '') AS raw_alternative_names,
     (
         CASE
             WHEN COALESCE(json_array_length(gsa.green_skills), 0) > 0 THEN true
@@ -210,7 +204,7 @@ LEFT JOIN green_skills_agg gsa ON o.conceptUri = gsa.occupationUri
 LEFT JOIN digital_skills_agg dsa ON o.conceptUri = dsa.occupationUri
 LEFT JOIN transversal_skills_agg tsa ON o.conceptUri = tsa.occupationUri
 LEFT JOIN language_skills_agg lsa ON o.conceptUri = lsa.occupationUri
-LEFT JOIN alt_labels_json alj ON o.conceptUri = alj.conceptUri
+LEFT JOIN alt_labels_raw alr ON o.conceptUri = alr.conceptUri -- Join new CTE
 ORDER BY o.preferredLabel;
 
 -- Create an index on the occupation name for faster lookups
