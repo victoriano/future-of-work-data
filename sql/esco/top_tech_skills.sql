@@ -16,4 +16,3 @@ WHERE
     s.preferredLabel LIKE '%data%'
 GROUP BY s.preferredLabel
 ORDER BY occupation_count DESC
-LIMIT 100;
