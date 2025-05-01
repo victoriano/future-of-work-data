@@ -71,10 +71,10 @@ def main():
     try:
         for view_name, config in csv_configs.items():
             if os.path.exists(config['path']):
-                logging.info(f"  Dropping existing table (if any) and creating view: {view_name} from {config['path']}")
+                logging.info(f"  Dropping existing view/table (if any) and creating view: {view_name} from {config['path']}")
                 # Construct dtypes string for SQL
                 dtype_str = ', '.join([f"'{k}': '{v}'" for k, v in config['dtypes'].items()])
-                drop_sql = f"DROP TABLE IF EXISTS {view_name};"
+                drop_sql = f"DROP VIEW IF EXISTS {view_name}; DROP TABLE IF EXISTS {view_name};" # Drop view first, then table just in case
                 create_sql = f"""
                     CREATE OR REPLACE VIEW {view_name} AS
                     SELECT * FROM read_csv_auto('{config['path']}', header=True,

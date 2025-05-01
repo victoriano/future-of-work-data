@@ -17,7 +17,7 @@ def create_isco_hierarchy(base_path):
 
     try:
         print(f"Reading raw ISCO data from: {raw_csv_path}")
-        df = pd.read_csv(raw_csv_path)
+        df = pd.read_csv(raw_csv_path, dtype={'code': str})
     except FileNotFoundError:
         print(f"Error: Raw ISCO file not found at {raw_csv_path}")
         return
@@ -33,7 +33,7 @@ def create_isco_hierarchy(base_path):
         'preferredLabel': 'label'
     }, inplace=True)
 
-    # Ensure code is string
+    # Ensure code is string (technically redundant now but harmless)
     df_hierarchy['code'] = df_hierarchy['code'].astype(str)
 
     # Calculate level
