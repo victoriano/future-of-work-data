@@ -52,6 +52,44 @@ def main():
     except Exception as e:
         logging.error(f"Failed to connect to database: {e}")
         exit(1)
+        
+    # --- Explicitly create base views from CSVs with correct types ---
+    RAW_ESCO_DIR = 'data/raw/esco/1.2.0'
+    csv_configs = {
+        'occupations_en': {'path': os.path.join(RAW_ESCO_DIR, 'occupations_en.csv'), 'dtypes': {'conceptUri': 'VARCHAR', 'iscoGroup': 'VARCHAR'}},
+        'ISCOGroups_en': {'path': os.path.join(RAW_ESCO_DIR, 'ISCOGroups_en.csv'), 'dtypes': {'code': 'VARCHAR', 'conceptUri': 'VARCHAR'}},
+        'skills_en': {'path': os.path.join(RAW_ESCO_DIR, 'skills_en.csv'), 'dtypes': {'conceptUri': 'VARCHAR', 'skillType': 'VARCHAR'}},
+        'occupationSkillRelations_en': {'path': os.path.join(RAW_ESCO_DIR, 'occupationSkillRelations_en.csv'), 'dtypes': {'occupationUri': 'VARCHAR', 'skillUri': 'VARCHAR', 'relationType': 'VARCHAR'}},
+        'broaderRelationsOccPillar_en': {'path': os.path.join(RAW_ESCO_DIR, 'broaderRelationsOccPillar_en.csv'), 'dtypes': {'conceptUri': 'VARCHAR', 'broaderUri': 'VARCHAR'}},
+        'greenSkillsCollection_en': {'path': os.path.join(RAW_ESCO_DIR, 'greenSkillsCollection_en.csv'), 'dtypes': {'conceptUri': 'VARCHAR'}},
+        'digitalSkillsCollection_en': {'path': os.path.join(RAW_ESCO_DIR, 'digitalSkillsCollection_en.csv'), 'dtypes': {'conceptUri': 'VARCHAR'}},
+        'transversalSkillsCollection_en': {'path': os.path.join(RAW_ESCO_DIR, 'transversalSkillsCollection_en.csv'), 'dtypes': {'conceptUri': 'VARCHAR'}},
+        'languageSkillsCollection_en': {'path': os.path.join(RAW_ESCO_DIR, 'languageSkillsCollection_en.csv'), 'dtypes': {'conceptUri': 'VARCHAR'}}
+    }
+
+    logging.info("Creating/replacing base views from CSVs with explicit VARCHAR types...")
+    try:
+        for view_name, config in csv_configs.items():
+            if os.path.exists(config['path']):
+                logging.info(f"  Dropping existing table (if any) and creating view: {view_name} from {config['path']}")
+                # Construct dtypes string for SQL
+                dtype_str = ', '.join([f"'{k}': '{v}'" for k, v in config['dtypes'].items()])
+                drop_sql = f"DROP TABLE IF EXISTS {view_name};"
+                create_sql = f"""
+                    CREATE OR REPLACE VIEW {view_name} AS
+                    SELECT * FROM read_csv_auto('{config['path']}', header=True,
+                    dtypes={{{dtype_str}}});
+                """
+                con.sql(drop_sql) # Drop the table first
+                con.sql(create_sql) # Then create the view
+            else:
+                logging.warning(f"  CSV file not found for {view_name}: {config['path']}. Skipping view creation.")
+        logging.info("Base views created/replaced successfully (where CSVs were found).")
+    except Exception as e:
+        logging.error(f"Failed to create base views from CSVs: {e}")
+        con.close()
+        exit(1)
+    # ------------------------------------------------------------------
 
     logging.info(f"Reading view definition from: {VIEW_SQL_PATH}")
     try:
