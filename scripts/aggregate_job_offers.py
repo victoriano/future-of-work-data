@@ -42,20 +42,11 @@ def main():
         df_esco = df_esco.with_columns(
             pl.col('occupation_name').str.strip_chars().alias('occupation_name_cleaned')
         )
-         # Keep only essential columns for joining + final output base
-        esco_cols_to_keep = [
-            'occupation_uri', 'occupation_name', 'occupation_name_cleaned',
-            'isco_level_1_code', 'isco_level_1_label',
-            'isco_level_2_code', 'isco_level_2_label',
-            'isco_level_3_code', 'isco_level_3_label',
-            'isco_level_4_code', 'isco_level_4_label',
-            'description'
-        ]
-        # Filter out columns not in the dataframe
-        esco_cols_to_keep = [col for col in esco_cols_to_keep if col in df_esco.columns]
-        df_esco_base = df_esco.select(esco_cols_to_keep).unique(subset=['occupation_uri'], keep='first')
+        # Get all columns from df_esco, ensure uniqueness by occupation_uri
+        df_esco_base = df_esco.unique(subset=['occupation_uri'], keep='first')
         
         logging.info(f"ESCO profiles loaded and prepared. Shape: {df_esco_base.shape}")
+        logging.info(f"Columns kept from ESCO profiles: {df_esco_base.columns}")
     except Exception as e:
         logging.error(f"Failed to load or process ESCO profiles Parquet: {e}")
         return
