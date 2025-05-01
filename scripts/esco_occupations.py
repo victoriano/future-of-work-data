@@ -8,6 +8,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 DB_PATH = 'data/duckdb/esco_dataset_1.2.0.duckdb'
 VIEW_SQL_PATH = 'sql/esco/occupation_profile_view.sql'
+HIGH_HIERARCHY_PATH = 'data/derived/isco_hierarchy.parquet' # Path to the hierarchy file
 OUTPUT_DIR = 'data/processed/esco'
 OUTPUT_FILENAME = 'esco_occupation_profiles.parquet'
 OUTPUT_PATH = os.path.join(OUTPUT_DIR, OUTPUT_FILENAME)
@@ -85,6 +86,23 @@ def main():
     con.close()
     logging.info("Database connection closed.")
 
+    # --- Load ISCO Hierarchy Data ---
+    logging.info(f"Loading ISCO hierarchy data from: {HIGH_HIERARCHY_PATH}")
+    try:
+        df_hierarchy = pl.read_parquet(HIGH_HIERARCHY_PATH)
+        # Ensure hierarchy code is string for joining
+        df_hierarchy = df_hierarchy.with_columns(pl.col("code").cast(pl.Utf8))
+    except Exception as e:
+        logging.error(f"Failed to load ISCO hierarchy file: {e}")
+        exit(1)
+
+    # Ensure the join key in the main df is also string
+    if 'isco_group' in df.columns:
+        df = df.with_columns(pl.col("isco_group").cast(pl.Utf8))
+    else:
+        logging.error("'isco_group' column not found in occupation data. Cannot join hierarchy.")
+        exit(1)
+
     # --- Process Columns ---
     expressions = []
 
@@ -124,11 +142,108 @@ def main():
          df = df.drop(RAW_ALT_NAMES_COL)
          logging.info(f"Dropped intermediate column: {RAW_ALT_NAMES_COL}")
 
+    # --- Integrate ISCO Hierarchy ---
+    logging.info("Integrating ISCO hierarchy...")
+
+    # Define hierarchy levels and their target column names
+    hierarchy_levels = {
+        4: {'code': 'isco_level_4_code', 'label': 'isco_level_4_label', 'parent_join_col_next': 'isco_level_3_code_join'}, # Unit Group
+        3: {'code': 'isco_level_3_code', 'label': 'isco_level_3_label', 'parent_join_col_next': 'isco_level_2_code_join'}, # Minor Group
+        2: {'code': 'isco_level_2_code', 'label': 'isco_level_2_label', 'parent_join_col_next': 'isco_level_1_code_join'}, # Sub-Major Group
+        1: {'code': 'isco_level_1_code', 'label': 'isco_level_1_label', 'parent_join_col_next': None}                     # Major Group
+    }
+
+    # --- Initial Join for Level 4 --- 
+    level_4_info = hierarchy_levels[4]
+    df = df.join(
+        df_hierarchy.select(['code', 'label', 'parent_code']), # Select join key + payload
+        left_on='isco_group',       # Use occupation's ISCO code
+        right_on='code',            # Match hierarchy code
+        how='left'
+        # No suffix
+    ).rename({
+        'label': level_4_info['label'],               # Rename added label -> isco_level_4_label
+        'parent_code': level_4_info['parent_join_col_next'] # Rename added parent_code -> isco_level_3_code_join
+    })
+
+    # Create Level 4 code column: if join successful, it's the isco_group value
+    df = df.with_columns(
+        pl.when(pl.col(level_4_info['label']).is_not_null())
+        .then(pl.col('isco_group'))
+        .otherwise(None)
+        .alias(level_4_info['code']) # isco_level_4_code
+    )
+
+    # Drop the 'code' column from the right side of the join (df_hierarchy)
+    if 'code' in df.columns:
+        df = df.drop('code')
+
+    # --- Iterative Joins for Levels 3, 2, 1 ---
+    for level in range(3, 0, -1):
+        current_level_info = hierarchy_levels[level]
+        parent_level_info = hierarchy_levels[level + 1]
+        # Column in df containing the parent code to join on (created in previous iteration)
+        join_col_left = parent_level_info['parent_join_col_next'] 
+
+        # Check if the join column exists before proceeding
+        if join_col_left not in df.columns:
+             logging.warning(f"Join column '{join_col_left}' not found for level {level}. Skipping subsequent hierarchy levels.")
+             # Add null columns for this level and potentially break if needed
+             df = df.with_columns([
+                 pl.lit(None, dtype=pl.Utf8).alias(current_level_info['code']),
+                 pl.lit(None, dtype=pl.Utf8).alias(current_level_info['label'])
+             ])
+             # Depending on desired behavior, you might want to 'continue' or 'break' here
+             continue # Continue to try lower levels if possible, they might join from a different branch
+
+        df = df.join(
+            df_hierarchy.select(['code', 'label', 'parent_code']), # Select join key + payload
+            left_on=join_col_left,    # Use parent code from previous level
+            right_on='code',          # Match hierarchy code
+            how='left'
+            # No suffix
+        )
+
+        # Rename the newly added payload columns ('label', 'parent_code')
+        rename_map = {'label': current_level_info['label']}
+        if current_level_info['parent_join_col_next']:
+            rename_map['parent_code'] = current_level_info['parent_join_col_next']
+        df = df.rename(rename_map)
+
+        # Create the code column for the current level: if join successful, it's the join_col_left value
+        df = df.with_columns(
+            pl.when(pl.col(current_level_info['label']).is_not_null())
+            .then(pl.col(join_col_left))
+            .otherwise(None)
+            .alias(current_level_info['code']) # e.g., isco_level_3_code
+        )
+
+        # Drop the 'code' column from the right side of the join (df_hierarchy)
+        if 'code' in df.columns:
+            df = df.drop('code')
+        
+        # Drop the parent_code column if it was added but not renamed (level 1)
+        if 'parent_code' in df.columns and not current_level_info['parent_join_col_next']:
+            df = df.drop('parent_code')
+
+    # Clean up intermediate join columns (parent codes used for joining)
+    join_parent_cols = [info['parent_join_col_next'] for info in hierarchy_levels.values() if info['parent_join_col_next']]
+    df = df.drop([col for col in join_parent_cols if col in df.columns])
+
     # --- Reorder columns ---
     logging.info("Reordering columns...")
     priority_order = [
         'occupation_uri', 'occupation_name', FINAL_ALT_NAMES_COL,
         'occupation_description', 'occupation_definition',
+        # --- ISCO Hierarchy --- Start
+        'isco_group', # Original ISCO code from source
+        'isco_code', # ISCO code from joined ISCOGroups table (likely same as isco_group)
+        'isco_group_name',
+        'isco_level_1_code', 'isco_level_1_label',
+        'isco_level_2_code', 'isco_level_2_label',
+        'isco_level_3_code', 'isco_level_3_label',
+        'isco_level_4_code', 'isco_level_4_label',
+        # --- ISCO Hierarchy --- End
         'broader_occupation_uris', 'narrower_occupation_uris', 'parent_occupations',
         'essential_skills', 'optional_skills', 'essential_technical_skills',
         'essential_knowledge', 'essential_competences', 'digital_skills',
