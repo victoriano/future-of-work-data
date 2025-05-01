@@ -47,6 +47,15 @@ def create_isco_hierarchy(base_path):
     # Reorder columns for clarity
     df_hierarchy = df_hierarchy[['code', 'label', 'description', 'url', 'parent_code', 'level']]
 
+    # Remove duplicate rows based on the 'code' column
+    initial_rows = len(df_hierarchy)
+    df_hierarchy = df_hierarchy.drop_duplicates(subset=['code'], keep='first')
+    final_rows = len(df_hierarchy)
+    if final_rows < initial_rows:
+        print(f"Removed {initial_rows - final_rows} duplicate rows based on 'code'.")
+    else:
+        print("No duplicate 'code' values found.")
+
     try:
         print(f"Saving hierarchy data to: {derived_parquet_path}")
         df_hierarchy.to_parquet(derived_parquet_path, index=False, engine='pyarrow')
