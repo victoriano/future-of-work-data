@@ -248,6 +248,63 @@ try:
         else:
             print("Warning: No strata absolute columns found to estimate employees.")
             final_agg = final_agg.with_columns(pl.lit(None).cast(pl.Float64).alias("Estimated_Employees_2024"))
+
+        # Calculate % of total estimated employees
+        if "Estimated_Employees_2024" in final_agg.columns:
+            total_estimated_employees = final_agg["Estimated_Employees_2024"].sum()
+            if total_estimated_employees and total_estimated_employees != 0:
+                final_agg = final_agg.with_columns(
+                    (
+                        (pl.col("Estimated_Employees_2024") / total_estimated_employees) * 100
+                    ).round(2).alias("Estimated_Employees_pct")
+                )
+                print("Calculated Estimated_Employees_pct")
+            else:
+                print("Warning: Total estimated employees is zero or null, cannot calculate percentage.")
+                final_agg = final_agg.with_columns(pl.lit(None).cast(pl.Float64).alias("Estimated_Employees_pct"))
+        else:
+            print("Warning: Estimated_Employees_2024 column not found, cannot calculate percentage.")
+
+        # --- Aggregate into Simplified Size Categories --- 
+        print("Aggregating into simplified size categories...")
+        size_mapping = {
+            "Size_Micro (0-9)": ["Estrato_Sin asalariados_abs", "Estrato_De 1 a 2_abs", "Estrato_De 3 a 5_abs", "Estrato_De 6 a 9_abs"],
+            "Size_Small (10-49)": ["Estrato_De 10 a 19_abs", "Estrato_De 20 a 49_abs"],
+            "Size_Medium (50-249)": ["Estrato_De 50 a 99_abs", "Estrato_De 100 a 199_abs", "Estrato_De 200 a 249_abs"],
+            "Size_Large (250+)": ["Estrato_De 250 a 999_abs", "Estrato_De 1000 a 4999_abs", "Estrato_De 5000 o más asalariados_abs"]
+        }
+
+        for size_cat, strata_cols in size_mapping.items():
+            abs_col_name = f"{size_cat}_abs"
+            pct_col_name = f"{size_cat}_pct"
+            
+            # Check which source columns exist
+            existing_source_cols = [col for col in strata_cols if col in final_agg.columns]
+
+            if existing_source_cols:
+                # Calculate absolute sum
+                final_agg = final_agg.with_columns(
+                    pl.sum_horizontal([pl.col(c) for c in existing_source_cols]).alias(abs_col_name)
+                )
+
+                # Calculate percentage
+                if "Total_2024" in final_agg.columns:
+                    final_agg = final_agg.with_columns(
+                        pl.when(pl.col("Total_2024") != 0)
+                        .then((pl.col(abs_col_name) / pl.col("Total_2024")) * 100)
+                        .otherwise(0.0) # Avoid division by zero
+                        .round(2)
+                        .alias(pct_col_name)
+                    )
+                    print(f"  Calculated {abs_col_name} and {pct_col_name}")
+                else:
+                    print(f"  Warning: Total_2024 column missing, cannot calculate {pct_col_name}.")
+                    final_agg = final_agg.with_columns(pl.lit(None).cast(pl.Float64).alias(pct_col_name))
+            else:
+                print(f"  Warning: No source columns found for {size_cat}, skipping {abs_col_name} and {pct_col_name}.")
+                final_agg = final_agg.with_columns(pl.lit(None).cast(pl.Int64).alias(abs_col_name))
+                final_agg = final_agg.with_columns(pl.lit(None).cast(pl.Float64).alias(pct_col_name))
+
         # --- End Estimate Employees ---
 
         # --- Reorder Columns --- 
@@ -256,20 +313,40 @@ try:
             # Identify column groups
             activity_col = ["Actividad principal"]
             employee_col = ["Estimated_Employees_2024"] if "Estimated_Employees_2024" in final_agg.columns else []
+            employee_pct_col = ["Estimated_Employees_pct"] if "Estimated_Employees_pct" in final_agg.columns else []
             growth_cols = sorted([col for col in final_agg.columns if "Growth" in col], reverse=True) # Place Median first if name matches
             total_cols = sorted([col for col in final_agg.columns if col.startswith("Total_")], reverse=True)
             strata_abs_cols = sorted([col for col in final_agg.columns if col.startswith("Estrato_") and col.endswith("_abs")], key=lambda x: ["Sin asalariados", "De 1 a 2", "De 3 a 5", "De 6 a 9", "De 10 a 19", "De 20 a 49", "De 50 a 99", "De 100 a 199", "De 200 a 249", "De 250 a 999", "De 1000 a 4999", "De 5000 o más asalariados"].index(x.split("_")[1]))
-            condicion_abs_cols = sorted([col for col in final_agg.columns if col.startswith("Condicion_") and col.endswith("_abs")])
             strata_pct_cols = sorted([col for col in final_agg.columns if col.startswith("Estrato_") and col.endswith("_pct")], key=lambda x: ["Sin asalariados", "De 1 a 2", "De 3 a 5", "De 6 a 9", "De 10 a 19", "De 20 a 49", "De 50 a 99", "De 100 a 199", "De 200 a 249", "De 250 a 999", "De 1000 a 4999", "De 5000 o más asalariados"].index(x.split("_")[1]))
+            condicion_abs_cols = sorted([col for col in final_agg.columns if col.startswith("Condicion_") and col.endswith("_abs")])
             condicion_pct_cols = sorted([col for col in final_agg.columns if col.startswith("Condicion_") and col.endswith("_pct")])
+            # Explicitly order size columns from Micro to Large
+            size_order = ['Micro (0-9)', 'Small (10-49)', 'Medium (50-249)', 'Large (250+)']
+            size_abs_cols = [f"Size_{s}_abs" for s in size_order]
+            size_pct_cols = [f"Size_{s}_pct" for s in size_order]
 
             # Combine in desired order
-            ordered_cols = activity_col + employee_col + growth_cols + total_cols + strata_abs_cols + condicion_abs_cols + strata_pct_cols + condicion_pct_cols
+            ordered_cols = (
+                activity_col + 
+                employee_col + 
+                employee_pct_col + 
+                growth_cols + 
+                total_cols + 
+                size_abs_cols + 
+                size_pct_cols + 
+                strata_abs_cols + 
+                strata_pct_cols + 
+                condicion_abs_cols + 
+                condicion_pct_cols
+            )
 
             # Check if all original columns are accounted for
-            if len(ordered_cols) == len(all_cols) and set(ordered_cols) == set(all_cols):
+            current_cols = set(final_agg.columns)
+            expected_cols_set = set(ordered_cols)
+
+            if len(ordered_cols) == len(current_cols) and expected_cols_set == current_cols:
                 final_agg = final_agg.select(ordered_cols)
-                print("Columns reordered into groups (Employees, Growth, Totals, Abs, Pct).")
+                print("Columns reordered into groups (Employees, Growth, Totals, Simplified Size (Abs+Pct), Original Strata (Abs+Pct), Conditions (Abs+Pct)).")
             else:
                 print("Warning: Column mismatch during reordering. Keeping original order.")
                 # Log missing/extra columns for debugging if needed
@@ -281,7 +358,10 @@ try:
         # Update final schema printout
         print(f"Final aggregated shape (with growth): {final_agg.shape}")
         print("Final columns:", final_agg.columns)
-        print("Sample of final data:\n", final_agg.head())
+        print("Sample of final data:")
+        # Ensure print options display enough columns for verification if needed
+        with pl.Config(tbl_width_chars=200, tbl_cols=len(final_agg.columns)):
+             print(final_agg.head())
 
         # --- Step 7: Save Output ---
         final_agg.write_parquet(output_file)
