@@ -42,7 +42,6 @@ try:
     df_with_code = df_filtered.with_columns(
         pl.col("Actividad principal")
         .str.extract(r"^(\d+)\s", 1) # Extract first group (digits)
-        .str.strip_chars_start('0') # Remove leading '0' if present
         .alias("activity_code")
     )
 

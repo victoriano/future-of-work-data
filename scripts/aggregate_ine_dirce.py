@@ -1,93 +1,117 @@
 # scripts/aggregate_ine_dirce.py
 import polars as pl
 import os
+from collections import defaultdict
 
-# Define paths relative to the project root directory
-input_file = "data/derived/ine_dirce_empresas_filtered.parquet"
-output_dir = "data/processed/ine_dirce"
-output_file = os.path.join(output_dir, "ine_dirce_aggregated_by_activity.parquet")
+def sort_strata_columns(cols):
+    # Defines the desired order for strata columns
+    order = [
+        "Sin asalariados", "De 1 a 2", "De 3 a 5", "De 6 a 9", "De 10 a 19",
+        "De 20 a 49", "De 50 a 99", "De 100 a 199", "De 200 a 249", 
+        "De 250 a 999", "De 1000 a 4999", "De 5000 o más asalariados"
+    ]
+    # Create a mapping from the extracted name to its index in the order list
+    order_map = {name: i for i, name in enumerate(order)}
+    
+    def get_sort_key(col_name):
+        # Extract the part of the column name that corresponds to the strata description
+        parts = col_name.split('_')
+        # Handle potential format variations, assuming description starts after "Estrato_"
+        if len(parts) > 2:
+            strata_name = " ".join(parts[1:-1]) # Join parts between Estrato_ and _abs/_pct
+            return order_map.get(strata_name, float('inf')) # Use inf for any unexpected names
+        return float('inf') # Default for columns not matching expected format
 
-# Ensure output directory exists
-os.makedirs(output_dir, exist_ok=True)
-
-print(f"Reading file: {input_file}")
-
-try:
-    # Read the processed Parquet file
-    df = pl.read_parquet(input_file)
-    print("Input shape:", df.shape)
-    print("Input columns:", df.columns)
-
-    # --- Add Pre-filtering Step ---
-    conditions_to_exclude = ['Otras formas jurídicas', 'Personas físicas']
-    df_pre_filtered = df.filter(
-        ~pl.col("Condición jurídica").is_in(conditions_to_exclude)
-    )
-    print(f"Shape after excluding {conditions_to_exclude}:", df_pre_filtered.shape)
-    # --- End Pre-filtering Step ---
+    return sorted(cols, key=get_sort_key)
 
 
-    # --- Step 1: Filter by code_length (using pre-filtered data) ---
-    df_code3_filtered = df_pre_filtered.filter(pl.col("code_length") == 3) # Renamed for clarity
-    print("Shape after filtering code_length==3:", df_code3_filtered.shape)
+def main():
+    # Define file paths relative to the script location or project root
+    script_dir = os.path.dirname(__file__)
+    project_root = os.path.abspath(os.path.join(script_dir, '..')) 
+    input_file = os.path.join(project_root, "data", "derived", "ine_dirce_empresas_filtered.parquet")
+    output_dir = os.path.join(project_root, "data", "processed", "ine_dirce")
+    output_file = os.path.join(output_dir, "ine_dirce_aggregated_by_activity.parquet")
 
-    if df_code3_filtered.height == 0:
-        print("No data found matching the criteria. Exiting.")
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"Reading file: {input_file}")
+    df_filtered = pl.read_parquet(input_file)
+    print("Input shape:", df_filtered.shape)
+    print("Input columns:", df_filtered.columns)
+
+    # --- Prepare Division Mapping --- 
+    df_level2 = df_filtered.filter(pl.col("code_length") == 2)
+    division_map = df_level2.select(
+        pl.col("activity_code").alias("division_code"), 
+        pl.col("Actividad principal").alias("Division")
+    ).unique(subset=["division_code"], keep="first")
+
+    # --- Filter data for aggregation --- 
+    # Exclude 'Otras formas jurídicas' and 'Personas físicas' for aggregation
+    exclude_conditions = ['Otras formas jurídicas', 'Personas físicas']
+    df_agg_base = df_filtered.filter(~pl.col("Condición jurídica").is_in(exclude_conditions))
+    print(f"Shape after excluding {exclude_conditions}:", df_agg_base.shape)
+    
+    # Filter for 3-digit activity codes for main aggregation
+    df_level3 = df_agg_base.filter(pl.col("code_length") == 3)
+    print("Shape after filtering code_length==3:", df_level3.shape)
+
+    # --- Aggregate Total Companies per Year (and rename) --- 
+    # Pivot the table to get years as columns
+    df_pivoted = df_level3.pivot(
+         index="Actividad principal",
+         on="Periodo", # Use 'on' instead of deprecated 'columns'
+         values="Total",
+         aggregate_function="sum"
+     )
+    # Rename year columns to 'Total_YYYY'
+    year_rename_map = {col: f"Total_{col}" for col in df_pivoted.columns if col.isdigit() and len(col) == 4}
+    df_pivoted = df_pivoted.rename(year_rename_map)
+    
+    print(f"Aggregated years. Shape: {df_pivoted.shape}")
+
+    # --- Create 2024 specific DataFrame ---
+    df_2024 = df_level3.filter(pl.col("Periodo") == 2024)
+    print(f"Shape for 2024 only data: {df_2024.shape}")
+
+    if df_2024.height == 0:
+         print("Warning: No data found for the year 2024. Stratum and Condition aggregations will be empty.")
+         # Create empty placeholders if needed, or handle downstream
+         stratum_agg = df_pivoted.select("Actividad principal") # Start with just keys
+         condition_agg = df_pivoted.select("Actividad principal")
+         stratum_cols = []
+         condition_cols = []
     else:
-        # --- Step 2: Aggregate Total per Year (using all years in df_code3_filtered) ---
-        years = sorted(df_code3_filtered["Periodo"].unique().to_list())
-        year_cols = {str(year): f"Total_{year}" for year in years}
-        year_agg = (
-            df_code3_filtered.pivot( # Use df_code3_filtered
+        # --- Step 3: Aggregate by Estrato de asalariados (using 2024 data only) ---
+        stratum_agg = (
+            df_2024.pivot( # Use df_2024_filtered
                 index="Actividad principal",
-                on="Periodo", # Changed from columns to on
+                on="Estrato de asalariados", # Changed from columns to on
                 values="Total",
                 aggregate_function="sum"
             )
-            .rename(year_cols)
         )
-        print(f"Aggregated years. Shape: {year_agg.shape}")
+        stratum_cols = [col for col in stratum_agg.columns if col != "Actividad principal"]
+        print(f"Aggregated strata (2024 only). Shape: {stratum_agg.shape}")
 
-        # --- Create 2024 specific DataFrame ---
-        df_2024_filtered = df_code3_filtered.filter(pl.col("Periodo") == 2024)
-        print(f"Shape for 2024 only data: {df_2024_filtered.shape}")
-
-        if df_2024_filtered.height == 0:
-             print("Warning: No data found for the year 2024. Stratum and Condition aggregations will be empty.")
-             # Create empty placeholders if needed, or handle downstream
-             stratum_agg = year_agg.select("Actividad principal") # Start with just keys
-             condition_agg = year_agg.select("Actividad principal")
-             stratum_cols = []
-             condition_cols = []
-        else:
-            # --- Step 3: Aggregate by Estrato de asalariados (using 2024 data only) ---
-            stratum_agg = (
-                df_2024_filtered.pivot( # Use df_2024_filtered
-                    index="Actividad principal",
-                    on="Estrato de asalariados", # Changed from columns to on
-                    values="Total",
-                    aggregate_function="sum"
-                )
+        # --- Step 4: Aggregate by Condición jurídica (using 2024 data only) ---
+        condition_agg = (
+            df_2024.pivot( # Use df_2024_filtered
+                index="Actividad principal",
+                on="Condición jurídica", # Changed from columns to on
+                values="Total",
+                aggregate_function="sum"
             )
-            stratum_cols = [col for col in stratum_agg.columns if col != "Actividad principal"]
-            print(f"Aggregated strata (2024 only). Shape: {stratum_agg.shape}")
-
-            # --- Step 4: Aggregate by Condición jurídica (using 2024 data only) ---
-            condition_agg = (
-                df_2024_filtered.pivot( # Use df_2024_filtered
-                    index="Actividad principal",
-                    on="Condición jurídica", # Changed from columns to on
-                    values="Total",
-                    aggregate_function="sum"
-                )
-            )
-            condition_cols = [col for col in condition_agg.columns if col != "Actividad principal"]
-            print(f"Aggregated conditions (2024 only). Shape: {condition_agg.shape}")
+        )
+        condition_cols = [col for col in condition_agg.columns if col != "Actividad principal"]
+        print(f"Aggregated conditions (2024 only). Shape: {condition_agg.shape}")
 
 
         # --- Step 5: Join Aggregations ---
         # Start with year_agg (all years) and join the 2024-specific aggregations
-        final_agg = year_agg.join(
+        final_agg = df_pivoted.join(
             stratum_agg, on="Actividad principal", how="left" # Join 2024 stratum data
         ).join(
             condition_agg, on="Actividad principal", how="left" # Join 2024 condition data
@@ -307,15 +331,29 @@ try:
 
         # --- End Estimate Employees ---
 
+        # --- Add Division Column --- 
+        # Extract 3-digit code, then 2-digit prefix
+        final_agg = final_agg.with_columns(
+            pl.col("Actividad principal").str.extract(r"^(\d{3})", 1).alias("_activity_code_3")
+        ).with_columns(
+            pl.col("_activity_code_3").str.slice(0, 2).alias("division_code")
+        )
+
+        # Join with the division map
+        final_agg = final_agg.join(division_map, on="division_code", how="left")
+
+        # Drop temporary columns
+        final_agg = final_agg.drop("_activity_code_3", "division_code")
+
         # --- Reorder Columns --- 
         all_cols = final_agg.columns
-        if "Actividad principal" in all_cols and growth_col_name in all_cols and median_growth_col_name in all_cols:
+        if "Actividad principal" in all_cols and "Growth_2020_2024_pct" in all_cols and "Median_YoY_Growth_pct" in all_cols:
             # Identify column groups
             activity_col = ["Actividad principal"]
             employee_col = ["Estimated_Employees_2024"] if "Estimated_Employees_2024" in final_agg.columns else []
             employee_pct_col = ["Estimated_Employees_pct"] if "Estimated_Employees_pct" in final_agg.columns else []
             growth_cols = sorted([col for col in final_agg.columns if "Growth" in col], reverse=True) # Place Median first if name matches
-            total_cols = sorted([col for col in final_agg.columns if col.startswith("Total_")], reverse=True)
+            total_cols = sorted([col for col in final_agg.columns if col.startswith("Total_") and col[6:].isdigit()], reverse=True)
             strata_abs_cols = sorted([col for col in final_agg.columns if col.startswith("Estrato_") and col.endswith("_abs")], key=lambda x: ["Sin asalariados", "De 1 a 2", "De 3 a 5", "De 6 a 9", "De 10 a 19", "De 20 a 49", "De 50 a 99", "De 100 a 199", "De 200 a 249", "De 250 a 999", "De 1000 a 4999", "De 5000 o más asalariados"].index(x.split("_")[1]))
             strata_pct_cols = sorted([col for col in final_agg.columns if col.startswith("Estrato_") and col.endswith("_pct")], key=lambda x: ["Sin asalariados", "De 1 a 2", "De 3 a 5", "De 6 a 9", "De 10 a 19", "De 20 a 49", "De 50 a 99", "De 100 a 199", "De 200 a 249", "De 250 a 999", "De 1000 a 4999", "De 5000 o más asalariados"].index(x.split("_")[1]))
             condicion_abs_cols = sorted([col for col in final_agg.columns if col.startswith("Condicion_") and col.endswith("_abs")])
@@ -324,9 +362,11 @@ try:
             size_order = ['Micro (0-9)', 'Small (10-49)', 'Medium (50-249)', 'Large (250+)']
             size_abs_cols = [f"Size_{s}_abs" for s in size_order]
             size_pct_cols = [f"Size_{s}_pct" for s in size_order]
+            division_col = ["Division"]
 
             # Combine in desired order
             ordered_cols = (
+                division_col + 
                 activity_col + 
                 employee_col + 
                 employee_pct_col + 
@@ -346,7 +386,7 @@ try:
 
             if len(ordered_cols) == len(current_cols) and expected_cols_set == current_cols:
                 final_agg = final_agg.select(ordered_cols)
-                print("Columns reordered into groups (Employees, Growth, Totals, Simplified Size (Abs+Pct), Original Strata (Abs+Pct), Conditions (Abs+Pct)).")
+                print("Columns reordered into groups (Division, Activity, Employees, Growth, Totals, Simplified Size (Abs+Pct), Original Strata (Abs+Pct), Conditions (Abs+Pct)).")
             else:
                 print("Warning: Column mismatch during reordering. Keeping original order.")
                 # Log missing/extra columns for debugging if needed
@@ -367,6 +407,8 @@ try:
         final_agg.write_parquet(output_file)
         print(f"Aggregated data saved to: {output_file}")
 
+try:
+    main()
 except pl.exceptions.ComputeError as e:
     print(f"A Polars computation error occurred: {e}")
     print("This might happen if pivoting results in unexpected column names or types.")
@@ -374,3 +416,6 @@ except FileNotFoundError:
     print(f"Error: Input file not found at {input_file}")
 except Exception as e:
     print(f"An unexpected error occurred: {e}")
+
+if __name__ == "__main__":
+    main()
