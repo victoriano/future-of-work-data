@@ -160,7 +160,7 @@ try:
                     .when((pl.col(start_year_col) == 0) & (pl.col(end_year_col) == 0))
                     .then(0.0)
                     .otherwise(None) # Represents infinite growth when start is 0 and end > 0
-                ).round(2).alias(growth_col_name) # Round to 2 decimal places
+                ).round(1).alias(growth_col_name) # Round to 1 decimal place
             )
         else:
             print(f"Warning: Cannot calculate growth. Missing one or both columns: {start_year_col}, {end_year_col}")
@@ -203,7 +203,7 @@ try:
                         pl.concat_list(yoy_growth_exprs).alias("_yoy_growths")
                     )
                     final_agg = final_agg.with_columns(
-                        pl.col("_yoy_growths").list.median().alias(median_growth_col_name)
+                        pl.col("_yoy_growths").list.median().round(1).alias(median_growth_col_name) # Round median to 1
                     ).drop("_yoy_growths")
                     print(f"Calculated {median_growth_col_name}")
                 else:
@@ -217,46 +217,59 @@ try:
             final_agg = final_agg.with_columns(pl.lit(None).cast(pl.Float64).alias(median_growth_col_name))
         # --- End Median YoY Growth Calculation ---
 
+        # --- Estimate Employees 2024 ---
+        strata_midpoints = {
+            "Estrato_Sin asalariados_abs": 1, # Changed from 0 to 1
+            "Estrato_De 1 a 2_abs": 1.5,
+            "Estrato_De 3 a 5_abs": 4,
+            "Estrato_De 6 a 9_abs": 7.5,
+            "Estrato_De 10 a 19_abs": 14.5,
+            "Estrato_De 20 a 49_abs": 34.5,
+            "Estrato_De 50 a 99_abs": 74.5,
+            "Estrato_De 100 a 199_abs": 149.5,
+            "Estrato_De 200 a 249_abs": 224.5,
+            "Estrato_De 250 a 999_abs": 624.5,
+            "Estrato_De 1000 a 4999_abs": 2999.5,
+            "Estrato_De 5000 o más asalariados_abs": 5000, # Using lower bound as estimate
+        }
+
+        # Check which strata columns actually exist in the aggregated data
+        existing_strata_cols = [col for col in strata_midpoints if col in final_agg.columns]
+
+        if existing_strata_cols:
+            print("Calculating Estimated_Employees_2024...")
+            # Calculate the sum of (companies_in_stratum * midpoint_employees)
+            employee_sum_expr = pl.sum_horizontal(
+                [pl.col(col) * strata_midpoints[col] for col in existing_strata_cols]
+            )
+            final_agg = final_agg.with_columns(
+                employee_sum_expr.round(0).alias("Estimated_Employees_2024") # Round to whole number
+            )
+        else:
+            print("Warning: No strata absolute columns found to estimate employees.")
+            final_agg = final_agg.with_columns(pl.lit(None).cast(pl.Float64).alias("Estimated_Employees_2024"))
+        # --- End Estimate Employees ---
+
         # --- Reorder Columns --- 
         all_cols = final_agg.columns
         if "Actividad principal" in all_cols and growth_col_name in all_cols and median_growth_col_name in all_cols:
             # Identify column groups
-            fixed_start_cols = ["Actividad principal", median_growth_col_name, growth_col_name]
-            total_year_cols = sorted([col for col in all_cols if col.startswith("Total_") and col[6:].isdigit()], reverse=True)
-
-            # Define semantic order for Estrato columns
-            estrato_order = [
-                "Sin asalariados",
-                "De 1 a 2",
-                "De 3 a 5",
-                "De 6 a 9",
-                "De 10 a 19",
-                "De 20 a 49",
-                "De 50 a 99",
-                "De 100 a 199",
-                "De 200 a 249",
-                "De 250 a 999",
-                "De 1000 a 4999",
-                "De 5000 o más asalariados"
-            ]
-            estrato_abs_cols_ordered = [f"Estrato_{e}_abs" for e in estrato_order if f"Estrato_{e}_abs" in all_cols]
-            estrato_pct_cols_ordered = [f"Estrato_{e}_pct" for e in estrato_order if f"Estrato_{e}_pct" in all_cols]
-
-            # Keep Condicion columns sorted alphabetically for now
-            condicion_abs_cols = sorted([col for col in all_cols if col.startswith("Condicion_") and col.endswith("_abs")])
-            condicion_pct_cols = sorted([col for col in all_cols if col.startswith("Condicion_") and col.endswith("_pct") and col not in fixed_start_cols])
-
-            # Combine Abs and Pct columns with desired order
-            final_abs_cols = estrato_abs_cols_ordered + condicion_abs_cols
-            final_pct_cols = estrato_pct_cols_ordered + condicion_pct_cols
+            activity_col = ["Actividad principal"]
+            employee_col = ["Estimated_Employees_2024"] if "Estimated_Employees_2024" in final_agg.columns else []
+            growth_cols = sorted([col for col in final_agg.columns if "Growth" in col], reverse=True) # Place Median first if name matches
+            total_cols = sorted([col for col in final_agg.columns if col.startswith("Total_")], reverse=True)
+            strata_abs_cols = sorted([col for col in final_agg.columns if col.startswith("Estrato_") and col.endswith("_abs")], key=lambda x: ["Sin asalariados", "De 1 a 2", "De 3 a 5", "De 6 a 9", "De 10 a 19", "De 20 a 49", "De 50 a 99", "De 100 a 199", "De 200 a 249", "De 250 a 999", "De 1000 a 4999", "De 5000 o más asalariados"].index(x.split("_")[1]))
+            condicion_abs_cols = sorted([col for col in final_agg.columns if col.startswith("Condicion_") and col.endswith("_abs")])
+            strata_pct_cols = sorted([col for col in final_agg.columns if col.startswith("Estrato_") and col.endswith("_pct")], key=lambda x: ["Sin asalariados", "De 1 a 2", "De 3 a 5", "De 6 a 9", "De 10 a 19", "De 20 a 49", "De 50 a 99", "De 100 a 199", "De 200 a 249", "De 250 a 999", "De 1000 a 4999", "De 5000 o más asalariados"].index(x.split("_")[1]))
+            condicion_pct_cols = sorted([col for col in final_agg.columns if col.startswith("Condicion_") and col.endswith("_pct")])
 
             # Combine in desired order
-            ordered_cols = fixed_start_cols + total_year_cols + final_abs_cols + final_pct_cols
+            ordered_cols = activity_col + employee_col + growth_cols + total_cols + strata_abs_cols + condicion_abs_cols + strata_pct_cols + condicion_pct_cols
 
             # Check if all original columns are accounted for
             if len(ordered_cols) == len(all_cols) and set(ordered_cols) == set(all_cols):
                 final_agg = final_agg.select(ordered_cols)
-                print("Columns reordered into groups (Totals, Abs, Pct).")
+                print("Columns reordered into groups (Employees, Growth, Totals, Abs, Pct).")
             else:
                 print("Warning: Column mismatch during reordering. Keeping original order.")
                 # Log missing/extra columns for debugging if needed
