@@ -64,76 +64,144 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------
-    # 4. Skills (Count, Avg Importance/Level, List)
+    # 4. Skills (Count, Avg Importance/Level, List) - Filtered by P75 Level
     # ---------------------------------------------------------
-    logging.info("Aggregating skills")
-    skills_df = _query_pl(
-        con,
-        """
-            SELECT
-                onetsoc_code,
-                COUNT(DISTINCT skill_name) AS n_skills,
-                ROUND(AVG(CASE WHEN scale_id = 'IM' THEN skill_level END), 2) AS avg_skill_importance,
-                ROUND(AVG(CASE WHEN scale_id = 'LV' THEN skill_level END), 2) AS avg_skill_level,
-                list(DISTINCT skill_name ORDER BY skill_name) AS skills_list
+    logging.info("Aggregating skills (P75 Level filter)")
+    skills_agg_sql = """
+        WITH SkillLevels AS (
+            SELECT onetsoc_code, skill_name, skill_level
             FROM occupation_skills
-            GROUP BY onetsoc_code
-        """
-    )
-
-    # ---------------------------------------------------------
-    # 5. Knowledge Areas (Count, Avg Importance/Level, List)
-    # ---------------------------------------------------------
-    logging.info("Aggregating knowledge areas")
-    knowledge_df = _query_pl(
-        con,
-        """
+            WHERE scale_id = 'LV'
+        ),
+        SkillP75 AS (
             SELECT
                 onetsoc_code,
-                COUNT(DISTINCT knowledge_area) AS n_knowledge_areas,
-                ROUND(AVG(CASE WHEN scale_id = 'IM' THEN knowledge_level END), 2) AS avg_knowledge_importance,
-                ROUND(AVG(CASE WHEN scale_id = 'LV' THEN knowledge_level END), 2) AS avg_knowledge_level,
-                list(DISTINCT knowledge_area ORDER BY knowledge_area) AS knowledge_list
+                PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY skill_level) AS p75_skill_level
+            FROM SkillLevels
+            GROUP BY onetsoc_code
+        ),
+        SignificantSkills AS (
+            SELECT sl.onetsoc_code, sl.skill_name
+            FROM SkillLevels sl
+            JOIN SkillP75 p75 ON sl.onetsoc_code = p75.onetsoc_code
+            WHERE sl.skill_level >= p75.p75_skill_level
+        )
+        SELECT
+            os.onetsoc_code,
+            COUNT(DISTINCT os.skill_name) AS n_skills,
+            ROUND(AVG(CASE WHEN os.scale_id = 'IM' THEN os.skill_level END), 2) AS avg_skill_importance,
+            ROUND(AVG(CASE WHEN os.scale_id = 'LV' THEN os.skill_level END), 2) AS avg_skill_level,
+            list(DISTINCT os.skill_name ORDER BY os.skill_name) AS skills_list
+        FROM occupation_skills os
+        JOIN SignificantSkills ss ON os.onetsoc_code = ss.onetsoc_code AND os.skill_name = ss.skill_name
+        GROUP BY os.onetsoc_code;
+    """
+    skills_df = _query_pl(con, skills_agg_sql)
+
+    # ---------------------------------------------------------
+    # 5. Knowledge Areas (Count, Avg Importance/Level, List) - Filtered by P75 Level
+    # ---------------------------------------------------------
+    logging.info("Aggregating knowledge areas (P75 Level filter)")
+    knowledge_agg_sql = """
+        WITH KnowledgeLevels AS (
+            SELECT onetsoc_code, knowledge_area, knowledge_level
             FROM occupation_knowledge
-            GROUP BY onetsoc_code
-        """
-    )
-
-    # ---------------------------------------------------------
-    # 6. Abilities (Count, Avg Importance/Level, List)
-    # ---------------------------------------------------------
-    logging.info("Aggregating abilities")
-    abilities_df = _query_pl(
-        con,
-        """
+            WHERE scale_id = 'LV'
+        ),
+        KnowledgeP75 AS (
             SELECT
                 onetsoc_code,
-                COUNT(DISTINCT element_name) AS n_abilities,
-                ROUND(AVG(CASE WHEN scale_id = 'IM' THEN data_value END), 2) AS avg_ability_importance,
-                ROUND(AVG(CASE WHEN scale_id = 'LV' THEN data_value END), 2) AS avg_ability_level,
-                list(DISTINCT element_name ORDER BY element_name) AS abilities_list
+                PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY knowledge_level) AS p75_knowledge_level
+            FROM KnowledgeLevels
+            GROUP BY onetsoc_code
+        ),
+        SignificantKnowledge AS (
+            SELECT kl.onetsoc_code, kl.knowledge_area
+            FROM KnowledgeLevels kl
+            JOIN KnowledgeP75 p75 ON kl.onetsoc_code = p75.onetsoc_code
+            WHERE kl.knowledge_level >= p75.p75_knowledge_level
+        )
+        SELECT
+            ok.onetsoc_code,
+            COUNT(DISTINCT ok.knowledge_area) AS n_knowledge_areas,
+            ROUND(AVG(CASE WHEN ok.scale_id = 'IM' THEN ok.knowledge_level END), 2) AS avg_knowledge_importance,
+            ROUND(AVG(CASE WHEN ok.scale_id = 'LV' THEN ok.knowledge_level END), 2) AS avg_knowledge_level,
+            list(DISTINCT ok.knowledge_area ORDER BY ok.knowledge_area) AS knowledge_list
+        FROM occupation_knowledge ok
+        JOIN SignificantKnowledge sk ON ok.onetsoc_code = sk.onetsoc_code AND ok.knowledge_area = sk.knowledge_area
+        GROUP BY ok.onetsoc_code;
+    """
+    knowledge_df = _query_pl(con, knowledge_agg_sql)
+
+    # ---------------------------------------------------------
+    # 6. Abilities (Count, Avg Importance/Level, List) - Filtered by P75 Level
+    # ---------------------------------------------------------
+    logging.info("Aggregating abilities (P75 Level filter)")
+    abilities_agg_sql = """
+        WITH AbilityLevels AS (
+            SELECT onetsoc_code, element_name, data_value AS ability_level
             FROM abilities
-            GROUP BY onetsoc_code
-        """
-    )
-
-    # ---------------------------------------------------------
-    # 7. Work Activities (Count, Avg Importance/Level, List)
-    # ---------------------------------------------------------
-    logging.info("Aggregating work activities")
-    activities_df = _query_pl(
-        con,
-        """
+            WHERE scale_id = 'LV'
+        ),
+        AbilityP75 AS (
             SELECT
                 onetsoc_code,
-                COUNT(DISTINCT activity) AS n_work_activities,
-                ROUND(AVG(CASE WHEN scale_id = 'IM' THEN activity_level END), 2) AS avg_activity_importance,
-                ROUND(AVG(CASE WHEN scale_id = 'LV' THEN activity_level END), 2) AS avg_activity_level,
-                list(DISTINCT activity ORDER BY activity) AS work_activities_list
-            FROM occupation_work_activities
+                PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY ability_level) AS p75_ability_level
+            FROM AbilityLevels
             GROUP BY onetsoc_code
-        """
-    )
+        ),
+        SignificantAbilities AS (
+            SELECT al.onetsoc_code, al.element_name
+            FROM AbilityLevels al
+            JOIN AbilityP75 p75 ON al.onetsoc_code = p75.onetsoc_code
+            WHERE al.ability_level >= p75.p75_ability_level
+        )
+        SELECT
+            a.onetsoc_code,
+            COUNT(DISTINCT a.element_name) AS n_abilities,
+            ROUND(AVG(CASE WHEN a.scale_id = 'IM' THEN a.data_value END), 2) AS avg_ability_importance,
+            ROUND(AVG(CASE WHEN a.scale_id = 'LV' THEN a.data_value END), 2) AS avg_ability_level,
+            list(DISTINCT a.element_name ORDER BY a.element_name) AS abilities_list
+        FROM abilities a
+        JOIN SignificantAbilities sa ON a.onetsoc_code = sa.onetsoc_code AND a.element_name = sa.element_name
+        GROUP BY a.onetsoc_code;
+    """
+    abilities_df = _query_pl(con, abilities_agg_sql)
+
+    # ---------------------------------------------------------
+    # 7. Work Activities (Count, Avg Importance/Level, List) - Filtered by P75 Level
+    # ---------------------------------------------------------
+    logging.info("Aggregating work activities (P75 Level filter)")
+    work_activities_agg_sql = """
+        WITH ActivityLevels AS (
+            SELECT onetsoc_code, activity, activity_level
+            FROM occupation_work_activities
+            WHERE scale_id = 'LV'
+        ),
+        ActivityP75 AS (
+            SELECT
+                onetsoc_code,
+                PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY activity_level) AS p75_activity_level
+            FROM ActivityLevels
+            GROUP BY onetsoc_code
+        ),
+        SignificantActivities AS (
+            SELECT acl.onetsoc_code, acl.activity
+            FROM ActivityLevels acl
+            JOIN ActivityP75 p75 ON acl.onetsoc_code = p75.onetsoc_code
+            WHERE acl.activity_level >= p75.p75_activity_level
+        )
+        SELECT
+            owa.onetsoc_code,
+            COUNT(DISTINCT owa.activity) AS n_work_activities,
+            ROUND(AVG(CASE WHEN owa.scale_id = 'IM' THEN owa.activity_level END), 2) AS avg_activity_importance,
+            ROUND(AVG(CASE WHEN owa.scale_id = 'LV' THEN owa.activity_level END), 2) AS avg_activity_level,
+            list(DISTINCT owa.activity ORDER BY owa.activity) AS work_activities_list
+        FROM occupation_work_activities owa
+        JOIN SignificantActivities sa ON owa.onetsoc_code = sa.onetsoc_code AND owa.activity = sa.activity
+        GROUP BY owa.onetsoc_code;
+    """
+    activities_df = _query_pl(con, work_activities_agg_sql)
 
     # ---------------------------------------------------------
     # 8. Technology Skills (Count, List)
