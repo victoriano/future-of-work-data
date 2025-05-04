@@ -11,6 +11,14 @@ OUTPUT_DIR = 'data/processed/onet'
 OUTPUT_FILENAME = 'onet_occupations_aggregated.parquet'
 OUTPUT_PATH = os.path.join(OUTPUT_DIR, OUTPUT_FILENAME)
 
+# --- OEWS Salary Data Config ---
+OEWS_SALARY_PATH = 'data/raw/OEWS/national_M2024_dl.xlsx'
+OEWS_OCC_CODE_COL = 'OCC_CODE' # Expected OCC Code column name in OEWS
+OEWS_SALARY_COLS = ['A_MEDIAN', 'A_PCT25', 'A_PCT75'] # Salary columns to fetch
+OEWS_EXTRA_COLS = ['TOT_EMP', 'O_GROUP', 'EMP_PRSE', 'MEAN_PRSE'] # Additional OEWS cols
+OEWS_NUMERIC_EXTRA_COLS = ['TOT_EMP', 'EMP_PRSE', 'MEAN_PRSE'] # Extra cols needing numeric cleaning
+OEWS_NULL_VALUES = ['*', '#'] # Values representing nulls in OEWS salary data
+
 # Helper to run a SQL query against the DuckDB file and return a Polars DataFrame
 def _query_pl(con: duckdb.DuckDBPyConnection, sql: str) -> pl.DataFrame:
     """Execute SQL and return result as Polars DataFrame."""
@@ -207,22 +215,87 @@ def main() -> None:
     # 8. Technology Skills (Count, List)
     # ---------------------------------------------------------
     logging.info("Aggregating technology skills")
-    tech_df = _query_pl(
-        con,
-        """
-            SELECT
-                onetsoc_code,
-                COUNT(DISTINCT commodity_title) AS n_technology_skills,
-                list(DISTINCT commodity_title ORDER BY commodity_title) AS tech_skills_list
-            FROM technology_skills
-            GROUP BY onetsoc_code
-        """
-    )
+    tech_skills_agg_sql = """
+        SELECT
+            ts.onetsoc_code,
+            COUNT(DISTINCT ts.commodity_title) AS n_technology_skills,
+            list(DISTINCT ts.commodity_title ORDER BY ts.commodity_title) AS tech_skills_list
+        FROM technology_skills ts
+        GROUP BY ts.onetsoc_code
+    """
+    tech_skills_df = _query_pl(con, tech_skills_agg_sql)
+
+    con.close() # Close DuckDB connection
 
     # ---------------------------------------------------------
-    # 9. Merge all aggregates using Polars left joins
+    # 9. Load and Prepare OEWS Salary Data
     # ---------------------------------------------------------
-    logging.info("Merging all aggregates into final DataFrame")
+    logging.info(f"Loading OEWS salary data from: {OEWS_SALARY_PATH}")
+    try:
+        df_salary = pl.read_excel(
+            OEWS_SALARY_PATH # Read without null_values argument
+        )
+        logging.info(f"OEWS salary data loaded. Shape: {df_salary.shape}")
+
+        # Select and rename necessary columns
+        cols_to_select_from_oews = [OEWS_OCC_CODE_COL] + OEWS_SALARY_COLS + OEWS_EXTRA_COLS
+        df_salary = df_salary.select(cols_to_select_from_oews)
+
+        # Rename OCC code column for clarity before join
+        df_salary = df_salary.rename({OEWS_OCC_CODE_COL: 'soc_code'})
+
+        # Replace specific strings with nulls in salary columns before casting
+        cols_to_clean = OEWS_SALARY_COLS + OEWS_NUMERIC_EXTRA_COLS
+        for col in cols_to_clean:
+            for null_val in OEWS_NULL_VALUES:
+                df_salary = df_salary.with_columns(
+                    # Explicitly cast to string for comparison
+                    pl.when(pl.col(col).cast(pl.Utf8) == null_val)
+                    .then(None)
+                    .otherwise(pl.col(col))
+                    .alias(col)
+                )
+        logging.info(f"Replaced {OEWS_NULL_VALUES} with nulls in salary columns.")
+
+        # Now, convert salary columns to Float64, errors -> null
+        # Convert TOT_EMP to Int64, others to Float64
+        for col in OEWS_SALARY_COLS:
+            df_salary = df_salary.with_columns(
+                pl.col(col).cast(pl.Float64, strict=False).alias(col)
+            )
+        if 'TOT_EMP' in df_salary.columns:
+             df_salary = df_salary.with_columns(
+                 pl.col('TOT_EMP').cast(pl.Int64, strict=False).alias('TOT_EMP')
+             )
+        for col in ['EMP_PRSE', 'MEAN_PRSE']:
+             if col in df_salary.columns:
+                 df_salary = df_salary.with_columns(
+                     pl.col(col).cast(pl.Float64, strict=False).alias(col)
+                 )
+        logging.info("OEWS salary columns selected, renamed, and cast to float.")
+
+    except Exception as e:
+        logging.error(f"Failed to load or process OEWS salary data: {e}")
+        # Optionally, decide if you want to proceed without salary data or exit
+        # For now, we'll create an empty placeholder if loading fails
+        df_salary = pl.DataFrame({
+            'soc_code': [],
+            **{col: [] for col in OEWS_SALARY_COLS},
+            **{col: [] for col in OEWS_EXTRA_COLS}
+        }).with_columns([
+            pl.col('soc_code').cast(pl.Utf8),
+            *[pl.col(col).cast(pl.Float64) for col in OEWS_SALARY_COLS],
+            pl.col('TOT_EMP').cast(pl.Int64),
+            pl.col('O_GROUP').cast(pl.Utf8),
+            pl.col('EMP_PRSE').cast(pl.Float64),
+            pl.col('MEAN_PRSE').cast(pl.Float64),
+        ])
+        logging.warning("Proceeding without salary data due to loading error.")
+
+    # ---------------------------------------------------------
+    # 10. Merge all ONET aggregates
+    # ---------------------------------------------------------
+    logging.info("Merging all ONET aggregates into final DataFrame")
     df_final = base_df
     joins = [
         job_zone_df,
@@ -231,25 +304,42 @@ def main() -> None:
         knowledge_df,
         abilities_df,
         activities_df,
-        tech_df,
+        tech_skills_df,
     ]
 
     for join_df in joins:
         df_final = df_final.join(join_df, on='onetsoc_code', how='left')
 
-    # ---------------------------------------------------------
-    # 10. Fill nulls for count columns with 0
-    # ---------------------------------------------------------
-    count_cols = [
-        c for c in df_final.columns if c.startswith('n_') or c in ['job_zone']
-    ]
-    df_final = df_final.with_columns([
-        pl.col(col).fill_null(0) if col != 'job_zone' else pl.col(col) for col in count_cols
-    ])
+    logging.info(f"Final DataFrame shape before salary join: {df_final.shape}")
 
-    logging.info(f"Final DataFrame shape before reorder: {df_final.shape}")
+    # ---------------------------------------------------------
+    # 12. Join with Salary Data
+    # ---------------------------------------------------------
+    # Prepare join key: Create SOC code (XX-XXXX) from ONET code (XX-XXXX.XX)
+    df_final = df_final.with_columns(
+        pl.col("onetsoc_code").str.slice(0, 7).alias("soc_code")
+    )
 
-    # Reorder columns: Place list columns right after description
+    # Perform the join
+    df_final = df_final.join(df_salary, on='soc_code', how='left')
+    logging.info(f"DataFrame shape after salary join: {df_final.shape}")
+
+    # Rename columns as requested
+    rename_map = {
+        'EMP_PRSE': 'Employment percent relative standard error',
+        'MEAN_PRSE': 'Wage percent relative standard error'
+    }
+    # Only rename if columns exist (in case of load error)
+    actual_rename_map = {k: v for k, v in rename_map.items() if k in df_final.columns}
+    if actual_rename_map:
+        df_final = df_final.rename(actual_rename_map)
+        logging.info(f"Renamed columns: {actual_rename_map}")
+
+    # Drop the temporary soc_code column used for joining
+    df_final = df_final.drop('soc_code')
+
+    # Reorder columns: Place list columns right after description,
+    # O_GROUP, then salary columns, TOT_EMP, error cols near end.
     list_cols = [
         'skills_list',
         'knowledge_list',
@@ -257,13 +347,31 @@ def main() -> None:
         'work_activities_list',
         'tech_skills_list'
     ]
-    # Get remaining columns, excluding the base and list columns already specified
     base_cols = ['onetsoc_code', 'occupation_title', 'occupation_description']
     other_cols = [col for col in df_final.columns if col not in base_cols + list_cols]
 
+    # Define column groups for ordering
+    # Ensure salary columns are handled correctly if they failed to load
+    actual_salary_cols = [col for col in OEWS_SALARY_COLS if col in df_final.columns]
+    o_group_col = ['O_GROUP'] if 'O_GROUP' in df_final.columns else []
+    tot_emp_col = ['TOT_EMP'] if 'TOT_EMP' in df_final.columns else []
+    error_cols = list(actual_rename_map.values()) # Use the new names
+
+    # Exclude grouped columns from 'other_cols'
+    grouped_cols = base_cols + list_cols + actual_salary_cols + o_group_col + tot_emp_col + error_cols
+    other_cols_final = [col for col in df_final.columns if col not in grouped_cols]
+
     # Define the final order
-    final_column_order = base_cols + list_cols + other_cols
-    df_final = df_final.select(final_column_order)
+    final_column_order = (
+        base_cols
+        + o_group_col
+        + list_cols
+        + actual_salary_cols
+        + tot_emp_col
+        + other_cols_final # Remaining ONET aggregates (counts, averages)
+        + error_cols       # Error columns at the end
+    )
+    df_final = df_final.select(final_column_order) # Apply final order
 
     logging.info(f"Final DataFrame shape after reorder: {df_final.shape}")
 
