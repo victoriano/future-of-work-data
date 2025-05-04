@@ -15,7 +15,7 @@ OUTPUT_PATH = os.path.join(OUTPUT_DIR, OUTPUT_FILENAME)
 OEWS_SALARY_PATH = 'data/raw/OEWS/national_M2024_dl.xlsx'
 OEWS_OCC_CODE_COL = 'OCC_CODE' # Expected OCC Code column name in OEWS
 OEWS_SALARY_COLS = ['A_MEDIAN', 'A_PCT25', 'A_PCT75'] # Salary columns to fetch
-OEWS_EXTRA_COLS = ['TOT_EMP', 'O_GROUP', 'EMP_PRSE', 'MEAN_PRSE'] # Additional OEWS cols
+OEWS_EXTRA_COLS = ['TOT_EMP', 'O_GROUP', 'EMP_PRSE', 'MEAN_PRSE', 'OCC_TITLE'] # Additional OEWS cols
 OEWS_NUMERIC_EXTRA_COLS = ['TOT_EMP', 'EMP_PRSE', 'MEAN_PRSE'] # Extra cols needing numeric cleaning
 OEWS_NULL_VALUES = ['*', '#'] # Values representing nulls in OEWS salary data
 
@@ -242,7 +242,10 @@ def main() -> None:
         df_salary = df_salary.select(cols_to_select_from_oews)
 
         # Rename OCC code column for clarity before join
-        df_salary = df_salary.rename({OEWS_OCC_CODE_COL: 'soc_code'})
+        df_salary = df_salary.rename({
+            OEWS_OCC_CODE_COL: 'soc_code',
+            'OCC_TITLE': 'occupation_group_title' # Rename OCC_TITLE
+        })
 
         # Replace specific strings with nulls in salary columns before casting
         cols_to_clean = OEWS_SALARY_COLS + OEWS_NUMERIC_EXTRA_COLS
@@ -287,6 +290,7 @@ def main() -> None:
             *[pl.col(col).cast(pl.Float64) for col in OEWS_SALARY_COLS],
             pl.col('TOT_EMP').cast(pl.Int64),
             pl.col('O_GROUP').cast(pl.Utf8),
+            pl.col('occupation_group_title').cast(pl.Utf8), # Add schema for placeholder
             pl.col('EMP_PRSE').cast(pl.Float64),
             pl.col('MEAN_PRSE').cast(pl.Float64),
         ])
@@ -347,18 +351,22 @@ def main() -> None:
         'work_activities_list',
         'tech_skills_list'
     ]
-    core_id_cols = ['onetsoc_code', 'occupation_title']
+    soc_code_col = ['onetsoc_code'] if 'onetsoc_code' in df_final.columns else []
+    occupation_group_title_col = ['occupation_group_title'] if 'occupation_group_title' in df_final.columns else []
+    occupation_title_col = ['occupation_title'] if 'occupation_title' in df_final.columns else []
+    description_col = ['occupation_description'] if 'occupation_description' in df_final.columns else [] # Keep description separate for now
     early_oews_cols = []
     if 'TOT_EMP' in df_final.columns: early_oews_cols.append('TOT_EMP')
     if 'A_MEDIAN' in df_final.columns: early_oews_cols.append('A_MEDIAN')
-    description_col = ['occupation_description'] if 'occupation_description' in df_final.columns else [] # Keep description separate for now
     other_salary_cols = [col for col in OEWS_SALARY_COLS if col in df_final.columns and col not in early_oews_cols]
     o_group_col = ['O_GROUP'] if 'O_GROUP' in df_final.columns else []
     error_cols = [v for k, v in actual_rename_map.items() if v in df_final.columns]
-    grouped_cols = core_id_cols + early_oews_cols + description_col + list_cols + other_salary_cols + o_group_col + error_cols
+    grouped_cols = soc_code_col + occupation_group_title_col + occupation_title_col + early_oews_cols + description_col + list_cols + other_salary_cols + o_group_col + error_cols
     other_cols_final = [col for col in df_final.columns if col not in grouped_cols]
     final_column_order = (
-        core_id_cols
+        soc_code_col
+        + occupation_group_title_col
+        + occupation_title_col
         + early_oews_cols
         + description_col # Put description back after early OEWS cols
         + list_cols
