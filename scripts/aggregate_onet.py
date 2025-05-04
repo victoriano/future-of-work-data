@@ -64,7 +64,7 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------
-    # 4. Skills aggregation
+    # 4. Skills (Count, Avg Importance/Level, List)
     # ---------------------------------------------------------
     logging.info("Aggregating skills")
     skills_df = _query_pl(
@@ -72,16 +72,17 @@ def main() -> None:
         """
             SELECT
                 onetsoc_code,
-                COUNT(DISTINCT skill_name)                           AS n_skills,
+                COUNT(DISTINCT skill_name) AS n_skills,
                 ROUND(AVG(CASE WHEN scale_id = 'IM' THEN skill_level END), 2) AS avg_skill_importance,
-                ROUND(AVG(CASE WHEN scale_id = 'LV' THEN skill_level END), 2) AS avg_skill_level
+                ROUND(AVG(CASE WHEN scale_id = 'LV' THEN skill_level END), 2) AS avg_skill_level,
+                list(DISTINCT skill_name ORDER BY skill_name) AS skills_list
             FROM occupation_skills
             GROUP BY onetsoc_code
         """
     )
 
     # ---------------------------------------------------------
-    # 5. Knowledge aggregation
+    # 5. Knowledge Areas (Count, Avg Importance/Level, List)
     # ---------------------------------------------------------
     logging.info("Aggregating knowledge areas")
     knowledge_df = _query_pl(
@@ -91,14 +92,15 @@ def main() -> None:
                 onetsoc_code,
                 COUNT(DISTINCT knowledge_area) AS n_knowledge_areas,
                 ROUND(AVG(CASE WHEN scale_id = 'IM' THEN knowledge_level END), 2) AS avg_knowledge_importance,
-                ROUND(AVG(CASE WHEN scale_id = 'LV' THEN knowledge_level END), 2) AS avg_knowledge_level
+                ROUND(AVG(CASE WHEN scale_id = 'LV' THEN knowledge_level END), 2) AS avg_knowledge_level,
+                list(DISTINCT knowledge_area ORDER BY knowledge_area) AS knowledge_list
             FROM occupation_knowledge
             GROUP BY onetsoc_code
         """
     )
 
     # ---------------------------------------------------------
-    # 6. Abilities aggregation
+    # 6. Abilities (Count, Avg Importance/Level, List)
     # ---------------------------------------------------------
     logging.info("Aggregating abilities")
     abilities_df = _query_pl(
@@ -108,14 +110,15 @@ def main() -> None:
                 onetsoc_code,
                 COUNT(DISTINCT element_name) AS n_abilities,
                 ROUND(AVG(CASE WHEN scale_id = 'IM' THEN data_value END), 2) AS avg_ability_importance,
-                ROUND(AVG(CASE WHEN scale_id = 'LV' THEN data_value END), 2) AS avg_ability_level
+                ROUND(AVG(CASE WHEN scale_id = 'LV' THEN data_value END), 2) AS avg_ability_level,
+                list(DISTINCT element_name ORDER BY element_name) AS abilities_list
             FROM abilities
             GROUP BY onetsoc_code
         """
     )
 
     # ---------------------------------------------------------
-    # 7. Work activities aggregation
+    # 7. Work Activities (Count, Avg Importance/Level, List)
     # ---------------------------------------------------------
     logging.info("Aggregating work activities")
     activities_df = _query_pl(
@@ -125,20 +128,24 @@ def main() -> None:
                 onetsoc_code,
                 COUNT(DISTINCT activity) AS n_work_activities,
                 ROUND(AVG(CASE WHEN scale_id = 'IM' THEN activity_level END), 2) AS avg_activity_importance,
-                ROUND(AVG(CASE WHEN scale_id = 'LV' THEN activity_level END), 2) AS avg_activity_level
+                ROUND(AVG(CASE WHEN scale_id = 'LV' THEN activity_level END), 2) AS avg_activity_level,
+                list(DISTINCT activity ORDER BY activity) AS work_activities_list
             FROM occupation_work_activities
             GROUP BY onetsoc_code
         """
     )
 
     # ---------------------------------------------------------
-    # 8. Technology skills aggregation
+    # 8. Technology Skills (Count, List)
     # ---------------------------------------------------------
     logging.info("Aggregating technology skills")
     tech_df = _query_pl(
         con,
         """
-            SELECT onetsoc_code, COUNT(DISTINCT commodity_title) AS n_technology_skills
+            SELECT
+                onetsoc_code,
+                COUNT(DISTINCT commodity_title) AS n_technology_skills,
+                list(DISTINCT commodity_title ORDER BY commodity_title) AS tech_skills_list
             FROM technology_skills
             GROUP BY onetsoc_code
         """
