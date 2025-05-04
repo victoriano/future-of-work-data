@@ -247,12 +247,29 @@ def main() -> None:
         pl.col(col).fill_null(0) if col != 'job_zone' else pl.col(col) for col in count_cols
     ])
 
-    logging.info(f"Final DataFrame shape: {df_final.shape}")
+    logging.info(f"Final DataFrame shape before reorder: {df_final.shape}")
 
-    # ---------------------------------------------------------
-    # 11. Save to Parquet
-    # ---------------------------------------------------------
+    # Reorder columns: Place list columns right after description
+    list_cols = [
+        'skills_list',
+        'knowledge_list',
+        'abilities_list',
+        'work_activities_list',
+        'tech_skills_list'
+    ]
+    # Get remaining columns, excluding the base and list columns already specified
+    base_cols = ['onetsoc_code', 'occupation_title', 'occupation_description']
+    other_cols = [col for col in df_final.columns if col not in base_cols + list_cols]
+
+    # Define the final order
+    final_column_order = base_cols + list_cols + other_cols
+    df_final = df_final.select(final_column_order)
+
+    logging.info(f"Final DataFrame shape after reorder: {df_final.shape}")
+
+    # Create output directory if it doesn't exist
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+
     logging.info(f"Writing Parquet to {OUTPUT_PATH}")
     df_final.write_parquet(OUTPUT_PATH)
     logging.info("Aggregation completed successfully")
