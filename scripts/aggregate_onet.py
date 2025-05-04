@@ -373,7 +373,7 @@ def main() -> None:
 
     # Sort by Total Employment descending if the column exists
     if 'TOT_EMP' in df_final.columns:
-        df_final = df_final.sort('TOT_EMP', descending=True)
+        df_final = df_final.sort('TOT_EMP', descending=True, nulls_last=True)
         logging.info("Sorted DataFrame by TOT_EMP descending.")
 
     # Ensure output directory exists
