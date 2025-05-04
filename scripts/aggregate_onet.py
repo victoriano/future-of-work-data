@@ -347,35 +347,36 @@ def main() -> None:
         'work_activities_list',
         'tech_skills_list'
     ]
-    base_cols = ['onetsoc_code', 'occupation_title', 'occupation_description']
-    other_cols = [col for col in df_final.columns if col not in base_cols + list_cols]
-
-    # Define column groups for ordering
-    # Ensure salary columns are handled correctly if they failed to load
-    actual_salary_cols = [col for col in OEWS_SALARY_COLS if col in df_final.columns]
+    core_id_cols = ['onetsoc_code', 'occupation_title']
+    early_oews_cols = []
+    if 'TOT_EMP' in df_final.columns: early_oews_cols.append('TOT_EMP')
+    if 'A_MEDIAN' in df_final.columns: early_oews_cols.append('A_MEDIAN')
+    description_col = ['occupation_description'] if 'occupation_description' in df_final.columns else [] # Keep description separate for now
+    other_salary_cols = [col for col in OEWS_SALARY_COLS if col in df_final.columns and col not in early_oews_cols]
     o_group_col = ['O_GROUP'] if 'O_GROUP' in df_final.columns else []
-    tot_emp_col = ['TOT_EMP'] if 'TOT_EMP' in df_final.columns else []
-    error_cols = list(actual_rename_map.values()) # Use the new names
-
-    # Exclude grouped columns from 'other_cols'
-    grouped_cols = base_cols + list_cols + actual_salary_cols + o_group_col + tot_emp_col + error_cols
+    error_cols = [v for k, v in actual_rename_map.items() if v in df_final.columns]
+    grouped_cols = core_id_cols + early_oews_cols + description_col + list_cols + other_salary_cols + o_group_col + error_cols
     other_cols_final = [col for col in df_final.columns if col not in grouped_cols]
-
-    # Define the final order
     final_column_order = (
-        base_cols
-        + o_group_col
+        core_id_cols
+        + early_oews_cols
+        + description_col # Put description back after early OEWS cols
         + list_cols
-        + actual_salary_cols
-        + tot_emp_col
+        + other_salary_cols
         + other_cols_final # Remaining ONET aggregates (counts, averages)
-        + error_cols       # Error columns at the end
+        + error_cols
+        + o_group_col      # O_GROUP at the very end
     )
     df_final = df_final.select(final_column_order) # Apply final order
 
     logging.info(f"Final DataFrame shape after reorder: {df_final.shape}")
 
-    # Create output directory if it doesn't exist
+    # Sort by Total Employment descending if the column exists
+    if 'TOT_EMP' in df_final.columns:
+        df_final = df_final.sort('TOT_EMP', descending=True)
+        logging.info("Sorted DataFrame by TOT_EMP descending.")
+
+    # Ensure output directory exists
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     logging.info(f"Writing Parquet to {OUTPUT_PATH}")
