@@ -34,18 +34,30 @@ future-of-work-data/
     └── views/                # Python scripts with SQL queries
 ```
 
-## Setup
+## Install for Development
 
-1. Clone this repository
-2. Create a virtual environment with uv:
-   ```
-   uv venv
-   source .venv/bin/activate
-   ```
-3. Install dependencies:
-   ```
-   uv pip install -e .
-   ```
+Clone the repository:
+
+``` bash
+git clone https://github.com/victoriano/future-of-work-data.git
+cd future-of-work-data
+```
+
+Setup environment with `uv`:
+
+``` bash
+uv sync --all-groups --all-extras
+```
+
+The `--all-groups`  option will install development and docs dependencies (e.g. linters etc.), and the `--all-extras` option optional dependencies such as notebook support.
+
+Optional: register the `uv` environment as a notebook kernel:
+
+``` bash
+uv run ipython kernel install --user --env VIRTUAL_ENV $(pwd)/.venv --name=fow
+```
+
+This will let you select the kernel `fow` associated with this environment in Jupyter or VS Code notebooks. You can replace "fow" with a kernel name of your choice.
 
 ## Data Processing
 
