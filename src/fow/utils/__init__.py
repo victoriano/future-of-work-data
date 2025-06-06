@@ -1,5 +1,6 @@
-from os.path import dirname, join
+from pathlib import Path
 
-def pathto(*paths) -> str:
-    """Get full path to local resource."""
-    return join(dirname(__file__), *paths)
+
+def pathto(*paths) -> Path:
+    """Get full path relative to root directory (future-of-work-datsa)."""
+    return Path(__file__).parents[3].joinpath(*paths)
