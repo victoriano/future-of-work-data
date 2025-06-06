@@ -625,6 +625,9 @@ dependencies = [
     { name = "duckdb" },
     { name = "openpyxl" },
     { name = "pandas" },
+    { name = "rich" },
+    { name = "tqdm" },
+    { name = "typer" },
 ]
 
 [package.optional-dependencies]
@@ -649,6 +652,9 @@ requires-dist = [
     { name = "jupyter", marker = "extra == 'nb'" },
     { name = "openpyxl", specifier = ">=3.1.0" },
     { name = "pandas", specifier = ">=2.0.0" },
+    { name = "rich", specifier = ">=13.9.4" },
+    { name = "tqdm", specifier = ">=4.67.1" },
+    { name = "typer", specifier = ">=0.15.4" },
 ]
 provides-extras = ["nb"]
 

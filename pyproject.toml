@@ -14,6 +14,9 @@ dependencies = [
     "duckdb>=1.2.0",
     "pandas>=2.0.0",
     "openpyxl>=3.1.0",
+    "tqdm>=4.67.1",
+    "typer>=0.15.4",
+    "rich>=13.9.4",
 ]
 
 [dependency-groups]
@@ -21,6 +24,9 @@ dev = ["black>=23.0.0", "isort>=5.12.0"]
 
 [project.optional-dependencies]
 nb = ["ipykernel", "ipython", "jupyter"]
+
+[project.scripts]
+fow = "fow.cli:app"
 
 [tool.uv]
 python-preference = "managed"
