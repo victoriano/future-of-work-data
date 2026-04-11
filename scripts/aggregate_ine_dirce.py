@@ -1,4 +1,5 @@
 # scripts/aggregate_ine_dirce.py
+import argparse
 import polars as pl
 import os
 from collections import defaultdict
@@ -25,13 +26,14 @@ def sort_strata_columns(cols):
     return sorted(cols, key=get_sort_key)
 
 
-def main():
+def main(export_csv: bool = False):
     # Define file paths relative to the script location or project root
     script_dir = os.path.dirname(__file__)
-    project_root = os.path.abspath(os.path.join(script_dir, '..')) 
+    project_root = os.path.abspath(os.path.join(script_dir, '..'))
     input_file = os.path.join(project_root, "data", "derived", "ine_dirce_empresas_filtered.parquet")
     output_dir = os.path.join(project_root, "data", "processed", "ine_dirce")
     output_file = os.path.join(output_dir, "ine_dirce_aggregated_by_activity.parquet")
+    output_file_csv = os.path.join(output_dir, "ine_dirce_aggregated_by_activity.csv")
 
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
@@ -407,15 +409,28 @@ def main():
         final_agg.write_parquet(output_file)
         print(f"Aggregated data saved to: {output_file}")
 
-try:
-    main()
-except pl.exceptions.ComputeError as e:
-    print(f"A Polars computation error occurred: {e}")
-    print("This might happen if pivoting results in unexpected column names or types.")
-except FileNotFoundError:
-    print(f"Error: Input file not found at {input_file}")
-except Exception as e:
-    print(f"An unexpected error occurred: {e}")
+        if export_csv:
+            csv_df = final_agg
+            if "Estimated_Employees_2024" in csv_df.columns:
+                csv_df = csv_df.sort("Estimated_Employees_2024", descending=True, nulls_last=True)
+            csv_df.write_csv(output_file_csv)
+            print(f"Aggregated data also saved as CSV to: {output_file_csv}")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Aggregate INE DIRCE data by activity.")
+    parser.add_argument(
+        "--csv",
+        action="store_true",
+        help="Also export the aggregated output as CSV alongside the Parquet file.",
+    )
+    args = parser.parse_args()
+
+    try:
+        main(export_csv=args.csv)
+    except pl.exceptions.ComputeError as e:
+        print(f"A Polars computation error occurred: {e}")
+        print("This might happen if pivoting results in unexpected column names or types.")
+    except FileNotFoundError as e:
+        print(f"Error: Input file not found: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
