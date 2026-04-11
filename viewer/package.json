@@ -1,0 +1,23 @@
+{
+  "name": "ine-dirce-viewer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "bun@1.2.8",
+  "scripts": {
+    "sync-data": "cd .. && uv run python scripts/export_ine_dirce_for_viewer.py",
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.13.23",
+    "@tanstack/react-table": "^8.21.3",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "vite": "^8.0.8"
+  }
+}

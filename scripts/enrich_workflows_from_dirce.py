@@ -21,6 +21,7 @@ is one (actividad, workflow) pair with both DIRCE metrics and the LLM analysis.
 import argparse
 import asyncio
 import os
+import sys
 from pathlib import Path
 from typing import Literal
 
@@ -32,6 +33,12 @@ from cuery.response import Response
 from pydantic import Field
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from fow.workflow_scoring import compute_scores
+
 INPUT_FILE = (
     PROJECT_ROOT
     / "data"
@@ -282,54 +289,6 @@ PROMPT = Prompt(
         "size_large_pct",
     ],
 )
-
-
-# ============================
-# Deterministic score computation
-# ============================
-
-
-def _norm(score: int | float) -> float:
-    """Convert a 1-5 score to a 0-100 scale."""
-    return ((float(score) - 1) / 4) * 100
-
-
-def compute_scores(row: dict) -> dict:
-    ai = (
-        _norm(row["verifiability_score"]) * 0.30
-        + _norm(row["verification_latency_score"]) * 0.20
-        + _norm(row["input_standardization_score"]) * 0.10
-        + _norm(row["output_standardization_score"]) * 0.10
-        + _norm(row["error_tolerance_score"]) * 0.15
-        + _norm(row["integration_ease_score"]) * 0.10
-        + _norm(row["autonomy_score"]) * 0.05
-    )
-    biz = (
-        _norm(row["pain_size_score"]) * 0.25
-        + _norm(row["recurrence_score"]) * 0.20
-        + _norm(row["roi_clarity_score"]) * 0.20
-        + _norm(row["adoption_ease_score"]) * 0.15
-        + _norm(row["productization_ease_score"]) * 0.10
-        + _norm(row["buyer_budget_score"]) * 0.10
-    )
-    priority = ai * 0.6 + biz * 0.4
-
-    if priority >= 75:
-        relative, horizon = "muy_alta", "ya"
-    elif priority >= 60:
-        relative, horizon = "alta", "12_meses"
-    elif priority >= 45:
-        relative, horizon = "media", "24_meses"
-    else:
-        relative, horizon = "baja", "no_priorizar"
-
-    return {
-        "ai_feasibility_score": round(ai, 1),
-        "business_opportunity_score": round(biz, 1),
-        "priority_score": round(priority, 1),
-        "relative_priority": relative,
-        "recommended_horizon": horizon,
-    }
 
 
 # ============================

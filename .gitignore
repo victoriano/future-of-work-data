@@ -38,3 +38,7 @@ ENV/
 # OS specific
 .DS_Store
 Thumbs.db
+
+# Frontend viewer
+viewer/node_modules/
+viewer/dist/

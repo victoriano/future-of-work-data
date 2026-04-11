@@ -91,6 +91,38 @@ esco_occupations = esco_con.execute("SELECT * FROM occupations_en LIMIT 10").fet
 onet_occupations = onet_con.execute("SELECT * FROM occupation_data LIMIT 10").fetchdf()
 ```
 
+## INE DIRCE Viewer
+
+This repository now includes a minimal React viewer for:
+
+`data/processed/ine_dirce/ine_dirce_workflows_enriched_top20.csv`
+
+The viewer lives in [viewer](./viewer) and uses TanStack Table to render all
+columns with horizontal scroll, semantic ordering, and a modal with the full
+detail of the selected row.
+
+### Run it locally
+
+Export the CSV to JSON for the frontend:
+
+```bash
+uv run python scripts/export_ine_dirce_for_viewer.py
+```
+
+Start the frontend:
+
+```bash
+cd viewer
+bun install
+bun run dev
+```
+
+Open the local URL printed by Vite, usually `http://127.0.0.1:4173/`.
+
+For development you do not need to rebuild on every change: `bun run dev`
+starts Vite with HMR, so React code updates are reflected immediately in the
+browser. Reserve `bun run build` for production bundles only.
+
 ## License
 
 This project uses data from:
