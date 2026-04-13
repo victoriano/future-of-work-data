@@ -20,6 +20,8 @@ const DESKTOP_TABLE_ROW_HEIGHT = 72;
 const MOBILE_TABLE_ROW_HEIGHT = 92;
 const MOBILE_BREAKPOINT = 720;
 const MOBILE_ANCHOR_COLUMNS = ["task_name", "priority_score"];
+const MODAL_TASK_PARAM = "task";
+const MODAL_ACTIVITY_PARAM = "activity";
 
 const columnHelper = createColumnHelper();
 
@@ -422,6 +424,72 @@ function normalizeText(value) {
 
 function normalizeQuery(value) {
   return normalizeText(value).trim();
+}
+
+function readModalParamsFromUrl() {
+  if (typeof window === "undefined") {
+    return { task: "", activity: "" };
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  return {
+    task: params.get(MODAL_TASK_PARAM) ?? "",
+    activity: params.get(MODAL_ACTIVITY_PARAM) ?? "",
+  };
+}
+
+function updateModalUrl(row, method = "push") {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const url = new URL(window.location.href);
+
+  if (row?.task_name) {
+    url.searchParams.set(MODAL_TASK_PARAM, row.task_name);
+    if (row.subsector) {
+      url.searchParams.set(MODAL_ACTIVITY_PARAM, row.subsector);
+    } else {
+      url.searchParams.delete(MODAL_ACTIVITY_PARAM);
+    }
+  } else {
+    url.searchParams.delete(MODAL_TASK_PARAM);
+    url.searchParams.delete(MODAL_ACTIVITY_PARAM);
+  }
+
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+  if (method === "replace") {
+    window.history.replaceState(null, "", nextUrl);
+    return;
+  }
+
+  window.history.pushState(null, "", nextUrl);
+}
+
+function findRowFromModalParams(rows, modalParams) {
+  if (!modalParams?.task) {
+    return null;
+  }
+
+  const normalizedTask = normalizeText(modalParams.task);
+  const normalizedActivity = normalizeText(modalParams.activity);
+  const matchingTaskRows = rows.filter(
+    (row) => normalizeText(row.task_name) === normalizedTask,
+  );
+
+  if (!matchingTaskRows.length) {
+    return null;
+  }
+
+  if (!normalizedActivity) {
+    return matchingTaskRows[0];
+  }
+
+  return (
+    matchingTaskRows.find(
+      (row) => normalizeText(row.subsector) === normalizedActivity,
+    ) ?? matchingTaskRows[0]
+  );
 }
 
 function useIsNarrowViewport(maxWidth = MOBILE_BREAKPOINT) {
@@ -1237,16 +1305,20 @@ function PriorityBreakdownPanel({ breakdown }) {
             <div className="score-breakdown__rows">
               {group.components.map((component) => (
                 <article key={component.field} className="score-breakdown__row">
-                  <div className="score-breakdown__row-label">
-                    <span>{component.label}</span>
-                    {component.invert ? <em>invertido</em> : null}
+                  <div className="score-breakdown__row-main">
+                    <div className="score-breakdown__row-label">
+                      <span>{component.label}</span>
+                      {component.invert ? <em>invertido</em> : null}
+                    </div>
+                    <strong>+{formatScoreNumber(component.contribution)}</strong>
                   </div>
-                  <code>
-                    {formatScoreNumber(component.raw_score, { maximumFractionDigits: 2 })} →{" "}
-                    {formatScoreNumber(component.normalized_score)}/100
-                  </code>
-                  <code>{formatWeight(component.weight)}</code>
-                  <strong>+{formatScoreNumber(component.contribution)}</strong>
+                  <div className="score-breakdown__row-meta">
+                    <code>
+                      {formatScoreNumber(component.raw_score, { maximumFractionDigits: 2 })} →{" "}
+                      {formatScoreNumber(component.normalized_score)}/100
+                    </code>
+                    <code>{formatWeight(component.weight)}</code>
+                  </div>
                 </article>
               ))}
             </div>
@@ -1330,15 +1402,15 @@ function PairTable({ label, rows }) {
     <DetailSection title={label}>
       <div className="pair-table">
         <div className="pair-table__head">
-          <span>Campo</span>
-          <span>Abs.</span>
-          <span>%</span>
+          <span className="pair-table__cell pair-table__cell--label">Campo</span>
+          <span className="pair-table__cell pair-table__cell--value">Abs.</span>
+          <span className="pair-table__cell pair-table__cell--value">%</span>
         </div>
         {rows.map((row) => (
           <div key={row.id} className="pair-table__row">
-            <span>{row.label}</span>
-            <strong>{row.absolute}</strong>
-            <strong>{row.percentage}</strong>
+            <span className="pair-table__cell pair-table__cell--label">{row.label}</span>
+            <strong className="pair-table__cell pair-table__cell--value">{row.absolute}</strong>
+            <strong className="pair-table__cell pair-table__cell--value">{row.percentage}</strong>
           </div>
         ))}
       </div>
@@ -1592,6 +1664,7 @@ function App() {
   const tableContainerRef = useRef(null);
   const isMobile = useIsNarrowViewport();
   const tableRowHeight = isMobile ? MOBILE_TABLE_ROW_HEIGHT : DESKTOP_TABLE_ROW_HEIGHT;
+  const [modalParams, setModalParams] = useState(() => readModalParamsFromUrl());
   const [dataset, setDataset] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -1645,6 +1718,10 @@ function App() {
     () => filterRows(preparedRows, normalizedSearch),
     [preparedRows, normalizedSearch],
   );
+  const allRowsById = useMemo(
+    () => new Map(preparedRows.map((row) => [row.__id, row])),
+    [preparedRows],
+  );
   const rowsById = useMemo(
     () => new Map(rows.map((row) => [row.__id, row])),
     [rows],
@@ -1660,12 +1737,45 @@ function App() {
       return;
     }
 
+    if (selectedRowId && allRowsById.has(selectedRowId)) {
+      return;
+    }
+
     if (!rowsById.has(selectedRowId)) {
       setSelectedRowId(rows[0].__id);
     }
-  }, [rows, rowsById, selectedRowId]);
+  }, [allRowsById, rows, rowsById, selectedRowId]);
 
-  const selectedRow = rowsById.get(selectedRowId) ?? rows[0] ?? null;
+  useEffect(() => {
+    function handlePopState() {
+      setModalParams(readModalParamsFromUrl());
+    }
+
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!preparedRows.length) {
+      return;
+    }
+
+    const modalRow = findRowFromModalParams(preparedRows, modalParams);
+    if (modalRow) {
+      setSelectedRowId(modalRow.__id);
+      setDetailSearch("");
+      setIsModalOpen(true);
+      return;
+    }
+
+    if (!modalParams.task) {
+      setIsModalOpen(false);
+    }
+  }, [modalParams, preparedRows]);
+
+  const selectedRow = allRowsById.get(selectedRowId) ?? rows[0] ?? preparedRows[0] ?? null;
 
   const table = useReactTable({
     data: rows,
@@ -1701,7 +1811,7 @@ function App() {
 
     function handleKeyDown(event) {
       if (event.key === "Escape") {
-        setIsModalOpen(false);
+        closeModal();
       }
     }
 
@@ -1713,10 +1823,28 @@ function App() {
     };
   }, [isModalOpen]);
 
+  function closeModal() {
+    setIsModalOpen(false);
+    setDetailSearch("");
+    setModalParams({ task: "", activity: "" });
+    updateModalUrl(null, "replace");
+  }
+
   function openRowModal(rowId) {
+    const row = allRowsById.get(rowId);
+    if (!row) {
+      return;
+    }
+
     setSelectedRowId(rowId);
     setDetailSearch("");
     setIsModalOpen(true);
+    const nextModalParams = {
+      task: row.task_name ?? "",
+      activity: row.subsector ?? "",
+    };
+    setModalParams(nextModalParams);
+    updateModalUrl(row, "push");
   }
 
   return (
@@ -1814,7 +1942,6 @@ function App() {
         <section className="table-panel">
           <div className="table-panel__meta">
             <p>{rows.length} filas visibles</p>
-            <p>Fuente: {dataset?.dataset}</p>
           </div>
           <p className="table-scroll-hint">
             En móvil quedan fijas <strong>Tarea</strong> y <strong>Priority Score</strong>.
@@ -1927,7 +2054,7 @@ function App() {
           row={selectedRow}
           query={detailSearch}
           onQueryChange={setDetailSearch}
-          onClose={() => setIsModalOpen(false)}
+          onClose={closeModal}
           scoreMetadata={scoreMetadata}
         />
       ) : null}
